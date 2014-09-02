@@ -39,8 +39,20 @@ public:
     // Here's an example configuration option.  You can use int, double, std::string, and bool options.
     // You can also create vectors of these (ask me for help if you'd like to do that).
     LSST_CONTROL_FIELD(
-        nGrowFootprint, int,
-        "Number of pixels to grow the original footprint when determining which pixels to use"
+        beta, double,
+        "Target PSF's width (stddev)"
+    );
+    LSST_CONTROL_FIELD(
+        k2_limit, double,
+        "Upper limit of |k|^2 to consider"
+    );
+    LSST_CONTROL_FIELD(
+        bbox_min, int,
+        "Minimum bounding box to use (in pixels)"
+    );
+    LSST_CONTROL_FIELD(
+        bbox_scale, double,
+        "Size of bounding box to use, relative to footprint's"
     );
 
 private:
@@ -91,8 +103,9 @@ private:
     // went wrong.  Don't worry about creating many Flags; each one only takes up a single bit
     // in each row of the catalog.  The extra flag key here is used to indicate when the object
     // is too close to the edge
-    afw::table::Key<double> _e1Key;
-    afw::table::Key<double> _e2Key;
+    afw::table::Key<double> _num1Key;
+    afw::table::Key<double> _num2Key;
+    afw::table::Key<double> _denomKey;
     afw::table::Key<afw::table::Flag> _flagKey;
     afw::table::Key<afw::table::Flag> _edgeFlagKey;
 };

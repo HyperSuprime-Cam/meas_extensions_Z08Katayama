@@ -82,6 +82,13 @@ class AlgorithmTestCase(lsst.utils.tests.TestCase):
         record.setFootprint(footprint)
         ms.applyWithPeak(record, exposure)
 
+        print record.get("shape.z08.flags")
+        print record.get("shape.z08.isedge")
+        print record.get("shape.z08.num1")
+        print record.get("shape.z08.num2")
+        print record.get("shape.z08.denom")
+
+
         # Test that the results are what we expect (should update expected values when algorithm is ready)
         self.assertFalse(record.get("shape.z08.flags"))  # check that failure flag is not set
         self.assertClose(record.get("shape.z08.e1"), 3.14)

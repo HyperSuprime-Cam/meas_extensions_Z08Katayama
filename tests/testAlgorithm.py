@@ -23,7 +23,7 @@
 #
 
 import unittest
-import os
+import os, math
 import numpy
 
 import lsst.utils.tests
@@ -37,19 +37,49 @@ numpy.random.seed(500)
 
 class AlgorithmTestCase(lsst.utils.tests.TestCase):
 
-    def fillTestExposure(self, exposure, ellipse, noiseSigma=None):
-        """A utility function to add a PSF-convolved elliptical Gaussian to an Exposure
+    def fillTestExposure(self, exposure, radius, ellipticity, noiseSigma=None):
+        """A utility function to add a PSF-convolved elliptical exponential disk to an Exposure
         """
-        psfSigma = lsst.afw.detection.GaussianPsf.cast(exposure.getPsf()).getSigma()
-        psfEllipse = lsst.afw.geom.ellipses.Quadrupole(psfSigma**2, psfSigma**2, 0.0)
-        convolvedEllipse = ellipse.convolve(psfEllipse)
-        t = convolvedEllipse.getGridTransform()
+        # compute a raw galaxy image
         bbox = exposure.getBBox(lsst.afw.image.PARENT)
-        x, y = numpy.meshgrid(numpy.arange(bbox.getBeginX(), bbox.getEndX()),
-                              numpy.arange(bbox.getBeginY(), bbox.getEndY()))
-        xt = t[t.XX]*x + t[t.XY]*y
-        yt = t[t.YX]*x + t[t.YY]*y
-        exposure.getMaskedImage().getImage().getArray()[:,:] = numpy.exp(-0.5*(x**2 + y**2))
+        radius /= 1.67835 # half light radius => effective radius
+
+        x = numpy.arange(bbox.getBeginX(), bbox.getEndX()) / radius
+        y = numpy.arange(bbox.getBeginY(), bbox.getEndY()) / radius
+        y.shape = (len(y), 1)
+
+        imageData = numpy.exp(
+            -numpy.sqrt(x**2 + y**2 - (ellipticity[0]*(x**2 - y**2) + 2*ellipticity[1]*x*y))
+        ) / (radius*radius)
+
+        # compute a psf image
+        imagePsf = exposure.getPsf().computeImage().getArray()
+        imagePsfNew = numpy.zeros(shape = imageData.shape)
+        h = min(imagePsf.shape[0], imagePsfNew.shape[0])
+        w = min(imagePsf.shape[1], imagePsfNew.shape[1])
+        imagePsfNew[0:h, 0:w] = imagePsf[0:h, 0:w]
+
+        # psf's center
+        y = numpy.arange(imagePsfNew.shape[0])
+        y.shape = (len(y), 1)
+        x = numpy.arange(imagePsfNew.shape[1])
+
+        centerX = (imagePsfNew * x).sum() / imagePsfNew.sum()
+        centerY = (imagePsfNew * y).sum() / imagePsfNew.sum()
+
+        # compute exp(ikx)
+        shiftY = numpy.fft.fftfreq(imagePsfNew.shape[0]) * (2j*math.pi*centerY)
+        shiftY.shape = (len(shiftY), 1)
+        shiftX = numpy.fft.fftfreq(imagePsfNew.shape[1]) * (2j*math.pi*centerX)
+
+        shift = numpy.exp(shiftX + shiftY)
+
+        # convolve psf to the galaxy
+        imageData = numpy.fft.ifft2(
+            numpy.fft.fft2(imageData) * numpy.fft.fft2(imagePsfNew) * shift
+        ).real
+
+        exposure.getMaskedImage().getImage().getArray()[:,:] = imageData
         if noiseSigma is not None:
             exposure.getMaskedImage().getImage().getArray()[:,:] \
                 += numpy.random.randn(bbox.getHeight(), bbox.getWidth()) * noiseSigma
@@ -63,9 +93,10 @@ class AlgorithmTestCase(lsst.utils.tests.TestCase):
         # Setup test data
         bbox = lsst.afw.geom.Box2I(lsst.afw.geom.Point2I(-30, -30), lsst.afw.geom.Point2I(30, 30))
         exposure = lsst.afw.image.ExposureF(bbox)
-        exposure.setPsf(lsst.afw.detection.GaussianPsf(17, 17, 1.5))  # width, height, sigma
-        ellipse = lsst.afw.geom.ellipses.Axes(6.0, 5.0, 0.5)   # a, b, theta of galaxy, pre-convolution
-        self.fillTestExposure(exposure, ellipse, noiseSigma=0.01)
+        exposure.setPsf(lsst.afw.detection.GaussianPsf(17, 17, 1.0))  # width, height, sigma
+        radius = 7
+        ellipticity = (0.3, 0.51961524227066314) # a:b = 2:1, angle = 30deg
+        self.fillTestExposure(exposure, radius, ellipticity, noiseSigma=0.0)
         # we'll use a square region that covers the full postage stamp for the Footprint
         footprint = lsst.afw.detection.Footprint(bbox)
         footprint.getPeaks().push_back(lsst.afw.detection.Peak(0, 0))
@@ -84,15 +115,13 @@ class AlgorithmTestCase(lsst.utils.tests.TestCase):
 
         print record.get("shape.z08.flags")
         print record.get("shape.z08.isedge")
-        print record.get("shape.z08.num1")
-        print record.get("shape.z08.num2")
-        print record.get("shape.z08.denom")
-
+        e1 = record.get("shape.z08.num1") / record.get("shape.z08.denom")
+        e2 = record.get("shape.z08.num2") / record.get("shape.z08.denom")
 
         # Test that the results are what we expect (should update expected values when algorithm is ready)
-        self.assertFalse(record.get("shape.z08.flags"))  # check that failure flag is not set
-        self.assertClose(record.get("shape.z08.e1"), 3.14)
-        self.assertClose(record.get("shape.z08.e2"), -3.14)
+        #self.assertFalse(record.get("shape.z08.flags"))  # check that failure flag is not set
+        self.assertClose(e1, ellipticity[0])
+        self.assertClose(e2, ellipticity[1])
 
 
 def suite():

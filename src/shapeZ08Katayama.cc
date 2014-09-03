@@ -20,6 +20,18 @@
 #include "lsst/meas/extensions/shapeZ08Katayama.h"
 #include "fft2.h"
 
+#if 1
+    #include <iostream>
+    template <class T>
+    inline void DebugShow(T const& var, char const* name, char const* file, int line){
+        std::cout << file << ":" << line << ": " << name << ": " << var << std::endl;
+    }
+    #define DEBUG_SHOW(var)  DebugShow(var, #var, __FILE__, __LINE__)
+#else
+    #define DEBUG_SHOW(var)  (void)0
+#endif
+
+
 namespace lsst { namespace meas { namespace extensions { namespace shapeZ08Katayama {
 
 namespace my {
@@ -37,8 +49,8 @@ ShapeZ08KatayamaControl::ShapeZ08KatayamaControl() :
     algorithms::AlgorithmControl("shape.z08", 3.0),
     // The default value for the configuration option defined below.  All configuration options must
     // have defaults defined here.
-    beta       (10.0 ),
-    k2_limit   ( 0.01),
+    beta       ( 3.0 ),
+    k2_limit   ( 0.05),
     bbox_min   (32   ),
     bbox_scale ( 2.0 )
 {}
@@ -160,18 +172,18 @@ void ShapeZ08KatayamaAlgorithm::_apply(
     // make the bounding box square (again)
     switch((top - bottom) - (right - left)){
     case  2:
-        left_relto_center   -= 1;
-        right_relto_center  += 1;
+        left   -= 1;
+        right  += 1;
         break;
     case  1:
-        right_relto_center  += 1;
+        right  += 1;
         break;
     case -1:
-        top_relto_center    += 1;
+        top    += 1;
         break;
     case -2:
-        bottom_relto_center -= 1;
-        top_relto_center    += 1;
+        bottom -= 1;
+        top    += 1;
         break;
     }
 
@@ -308,40 +320,62 @@ void ShapeZ08KatayamaAlgorithm::_apply(
     double My2 = 0.0;
     double Mxy = 0.0;
     double M4  = 0.0;
-    double const c = 4 * M_PI*M_PI / (beta*beta);
 
     double const k2_limit = getControl().k2_limit;
     double const Ih = 1.0 / (double)(int)height;
     double const Iw = 1.0 / (double)(int)width ;
 
-    for(int i = 0; i < (int)height; ++i){
-        int iy = (2*i < (int)height) ? i : i - height;
-        double ky = (double)iy * Ih;
-        double ky2 = ky * ky;
+    double e1 = 0.0, _2e2 = 0.0; // aperture's ellipticity
 
-        for(int j = 0; j < (int)width; ++j){
-            int jx = (2*j < (int)width) ? j : j - width;
-            double kx = (double)jx * Iw;
-            double kx2 = kx * kx;
+    for(int adaptive_aperture = 0; adaptive_aperture < 5; ++adaptive_aperture){
+        Mx2 = 0.0;
+        My2 = 0.0;
+        Mxy = 0.0;
+        M4  = 0.0;
 
-            if(kx2+ky2 < k2_limit){
-                double w
-                    = my::norm(MF            [i*width + j])
-                    * my::norm(PSF_F_target  [i*width + j])
-                    / my::norm(PSF_F_original[i*width + j])
-                    ;
-                Mx2 += w * kx2                  ;
-                My2 += w * ky2                  ;
-                Mxy += w * kx*ky                ;
-                M4  += w * ((kx2+ky2)*(kx2+ky2));
+        for(int i = 0; i < (int)height; ++i){
+            int iy = (2*i < (int)height) ? i : i - height;
+            double ky = (double)iy * Ih;
+            double ky2 = ky * ky;
+
+            for(int j = 0; j < (int)width; ++j){
+                int jx = (2*j < (int)width) ? j : j - width;
+                double kx = (double)jx * Iw;
+                double kx2 = kx * kx;
+
+                if(kx2+ky2 - (e1*(kx2-ky2) + _2e2*kx*ky) < k2_limit){
+                    double w
+                        = my::norm(MF            [i*width + j])
+                        * my::norm(PSF_F_target  [i*width + j])
+                        / my::norm(PSF_F_original[i*width + j])
+                        ;
+                    Mx2 += w * kx2                  ;
+                    My2 += w * ky2                  ;
+                    Mxy += w * kx*ky                ;
+                    M4  += w * ((kx2+ky2)*(kx2+ky2));
+                }
             }
         }
+
+        double e1_new   = (Mx2 - My2) * (1.0 / (Mx2 + My2));
+        double _2e2_new = 4 * Mxy     * (1.0 / (Mx2 + My2));
+
+        if((e1_new - e1)*(e1_new - e1) + 0.25*(_2e2_new - _2e2)*(_2e2_new - _2e2)
+            < 1e-3*1e-3
+        ){
+            break;
+        }
+
+        e1 = e1_new;
+        _2e2 = _2e2_new;
     }
 
+    double const c = -2*M_PI*M_PI * (beta*beta);
+
     source.set(_flagKey , isAnyError       );
-    source.set(_num1Key , 0.5 * (Mx2 - My2));
-    source.set(_num2Key , -Mxy             );
-    source.set(_denomKey, Mx2 + My2 - c*M4 );
+    source.set(_num1Key , -(Mx2 - My2)     );
+    source.set(_num2Key , -2*Mxy           );
+    source.set(_denomKey, Mx2 + My2 + c*M4 );
 }
 
 

@@ -104,6 +104,7 @@ class AlgorithmTestCase(lsst.utils.tests.TestCase):
         # Prepare measurement machinery
         config = lsst.meas.algorithms.SourceMeasurementConfig()
         config.algorithms.names = ["shape.z08"]
+
         schema = lsst.afw.table.SourceTable.makeMinimalSchema()
         ms = config.makeMeasureSources(schema)
         table = lsst.afw.table.SourceTable.make(schema)
@@ -113,10 +114,9 @@ class AlgorithmTestCase(lsst.utils.tests.TestCase):
         record.setFootprint(footprint)
         ms.applyWithPeak(record, exposure)
 
-        print record.get("shape.z08.flags")
-        print record.get("shape.z08.isedge")
         e1 = record.get("shape.z08.num1") / record.get("shape.z08.denom")
         e2 = record.get("shape.z08.num2") / record.get("shape.z08.denom")
+        print e1, e2
 
         # Test that the results are what we expect (should update expected values when algorithm is ready)
         #self.assertFalse(record.get("shape.z08.flags"))  # check that failure flag is not set

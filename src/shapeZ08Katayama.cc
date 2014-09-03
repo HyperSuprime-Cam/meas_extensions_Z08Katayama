@@ -49,8 +49,8 @@ ShapeZ08KatayamaControl::ShapeZ08KatayamaControl() :
     algorithms::AlgorithmControl("shape.z08", 3.0),
     // The default value for the configuration option defined below.  All configuration options must
     // have defaults defined here.
-    beta       ( 3.0 ),
-    k2_limit   ( 0.05),
+    beta       ( 0.0 ),
+    k2_limit   ( 0.11),
     bbox_min   (32   ),
     bbox_scale ( 2.0 )
 {}
@@ -284,32 +284,36 @@ void ShapeZ08KatayamaAlgorithm::_apply(
     // The target PSF
     //
 
-    std::vector<std::complex<double> > PSF_F_target;
+    double const _2piIh = (2*M_PI) / (double)(int)height;
+    double const _2piIw = (2*M_PI) / (double)(int)width ;
+
+    // target psf P(x) \sim exp(-x^2 / (2 \beta^2))
+    // => fourier transformed: P(k) = exp(-k^2 \beta^2 / 2)
+    // We pre-compute the squared one:
+    //   P(k)^2 = exp(-k^2 \beta^2)
+    std::vector<double> PSF_F_target_pow2(nPixels);
 
     double beta = getControl().beta;
     if(beta != 0){
-        // create a target PSF (gaussian)
-        double mI2bb = -0.5 / (beta*beta);
-        double cy   = 0.5 * (height - 1);
-        double cx   = 0.5 * (width  - 1);
+        double const m_bb = -(beta*beta);
+        std::vector<double>::iterator dest = PSF_F_target_pow2.begin();
 
-        std::complex<double>* dest = fft2.spaceDomain();
-        for(int y = 0; y < (int)height; ++y){
-            double yy = (y - cy)*(y - cy);
-            for(int x = 0; x < (int)width; ++x){
-                double xx = (x - cx)*(x - cx);
-                *(dest++) = std::exp(mI2bb * (xx + yy));
+        for(int i = 0; i < (int)height; ++i){
+            int iy = (2*i < (int)height) ? i : i - height;
+            double ky = (double)iy * _2piIh;
+            double ky2 = ky * ky;
+
+            for(int j = 0; j < (int)width; ++j){
+                int jx = (2*j < (int)width) ? j : j - width;
+                double kx = (double)jx * _2piIw;
+                double kx2 = kx * kx;
+
+                *(dest++) = std::exp(m_bb * (kx2 + ky2));
             }
         }
-
-        // transform!
-        fft2.forward();
-
-        // save the fourier-transformed target PSF
-        PSF_F_target.assign(fft2.freqDomain(), fft2.freqDomain() + nPixels);
     }
     else{
-        PSF_F_target.assign(nPixels, 1.0);
+        PSF_F_target_pow2.assign(nPixels, 1.0);
     }
 
     //
@@ -321,9 +325,8 @@ void ShapeZ08KatayamaAlgorithm::_apply(
     double Mxy = 0.0;
     double M4  = 0.0;
 
-    double const k2_limit = getControl().k2_limit;
-    double const Ih = 1.0 / (double)(int)height;
-    double const Iw = 1.0 / (double)(int)width ;
+    // angular frequency <= freguency
+    double const k2_limit = (2*M_PI) * getControl().k2_limit;
 
     double e1 = 0.0, _2e2 = 0.0; // aperture's ellipticity
 
@@ -335,18 +338,18 @@ void ShapeZ08KatayamaAlgorithm::_apply(
 
         for(int i = 0; i < (int)height; ++i){
             int iy = (2*i < (int)height) ? i : i - height;
-            double ky = (double)iy * Ih;
+            double ky = (double)iy * _2piIh;
             double ky2 = ky * ky;
 
             for(int j = 0; j < (int)width; ++j){
                 int jx = (2*j < (int)width) ? j : j - width;
-                double kx = (double)jx * Iw;
+                double kx = (double)jx * _2piIw;
                 double kx2 = kx * kx;
 
                 if(kx2+ky2 - (e1*(kx2-ky2) + _2e2*kx*ky) < k2_limit){
                     double w
                         = my::norm(MF            [i*width + j])
-                        * my::norm(PSF_F_target  [i*width + j])
+                        * PSF_F_target_pow2      [i*width + j]
                         / my::norm(PSF_F_original[i*width + j])
                         ;
                     Mx2 += w * kx2                  ;
@@ -370,7 +373,7 @@ void ShapeZ08KatayamaAlgorithm::_apply(
         _2e2 = _2e2_new;
     }
 
-    double const c = -2*M_PI*M_PI * (beta*beta);
+    double const c = -0.5 * (beta*beta);
 
     source.set(_flagKey , isAnyError       );
     source.set(_num1Key , -(Mx2 - My2)     );
